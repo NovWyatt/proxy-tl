@@ -119,8 +119,8 @@ class RenderTCPProxy {
 🔧 USAGE EXAMPLES:
 
    💻 Command Line:
-   curl -x ${req.headers.host}:443 https://www.google.com
-   curl -x ${req.headers.host}:443 http://httpbin.org/ip
+   curl -x ${req.headers.host}:80 https://www.google.com
+   curl -x ${req.headers.host}:80 http://httpbin.org/ip
    
    📱 Browser/App Config:
    HTTP Proxy: ${req.headers.host}:443
