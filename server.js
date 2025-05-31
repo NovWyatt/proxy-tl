@@ -1,13 +1,12 @@
-// server.js - Hybrid HTTP + SOCKS5 Proxy Server for Render
-// Supports HTTP proxy, CONNECT method, SOCKS5 proxy, and API endpoints
+// server.js - Unified HTTP + SOCKS5 Proxy Server for Render
+// Auto-detects protocol and routes to appropriate handler
 
 const http = require('http');
 const https = require('https');
 const net = require('net');
 const url = require('url');
 
-const HTTP_PORT = process.env.PORT || 10000;
-const SOCKS5_PORT = process.env.SOCKS5_PORT || (HTTP_PORT + 1);
+const PORT = process.env.PORT || 10000;
 const NODE_ENV = process.env.NODE_ENV || 'production';
 
 // SOCKS5 Protocol Constants
@@ -25,10 +24,9 @@ const ADDRESS_TYPES = {
   IPv6: 0x04
 };
 
-class HybridProxyServer {
+class UnifiedProxyServer {
   constructor() {
-    this.httpServer = null;
-    this.socks5Server = null;
+    this.server = null;
     this.connections = new Set();
     this.stats = {
       httpRequests: 0,
@@ -38,100 +36,208 @@ class HybridProxyServer {
       startTime: Date.now()
     };
     
-    // Optional SOCKS5 authentication
-    this.socks5Auth = null; // Set to {username: 'user', password: 'pass'} for auth
+    // Optional SOCKS5 authentication (set to null for no auth)
+    this.socks5Auth = null;
   }
 
   start() {
-    this.startHTTPServer();
-    this.startSOCKS5Server();
+    this.server = net.createServer((socket) => {
+      console.log('📡 New connection from:', socket.remoteAddress);
+      this.connections.add(socket);
+      
+      socket.on('close', () => {
+        this.connections.delete(socket);
+      });
+
+      socket.on('error', (err) => {
+        console.error('❌ Socket error:', err.message);
+        this.connections.delete(socket);
+      });
+
+      // Protocol detection based on first data packet
+      socket.once('data', (data) => {
+        this.detectAndRouteProtocol(socket, data);
+      });
+    });
+
+    this.server.on('error', (err) => {
+      console.error('❌ Server error:', err);
+      this.stats.errors++;
+    });
+
+    this.server.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Unified Proxy Server running on port ${PORT}`);
+      console.log(`🌐 HTTP/HTTPS Support: ✅`);
+      console.log(`🧦 SOCKS5 Support: ✅`);
+      console.log(`📱 Telegram Compatible: ✅`);
+      console.log(`⏰ Started: ${new Date().toISOString()}`);
+      console.log(`📊 Health: http://localhost:${PORT}/health`);
+    });
   }
 
-  startHTTPServer() {
-    this.httpServer = http.createServer((req, res) => {
-      this.stats.httpRequests++;
+  detectAndRouteProtocol(socket, firstData) {
+    try {
+      const dataStr = firstData.toString();
       
-      // Add comprehensive CORS headers
-      this.addCorsHeaders(res);
+      // Detect HTTP requests
+      const isHTTP = dataStr.startsWith('GET ') || 
+                    dataStr.startsWith('POST ') || 
+                    dataStr.startsWith('PUT ') || 
+                    dataStr.startsWith('DELETE ') ||
+                    dataStr.startsWith('HEAD ') ||
+                    dataStr.startsWith('OPTIONS ') ||
+                    dataStr.startsWith('CONNECT ');
+
+      // Detect SOCKS5 handshake (version 5)
+      const isSOCKS5 = firstData[0] === 0x05 && firstData.length >= 3;
+
+      if (isHTTP) {
+        console.log('🌐 Detected HTTP protocol');
+        this.handleHTTPConnection(socket, firstData);
+      } else if (isSOCKS5) {
+        console.log('🧦 Detected SOCKS5 protocol');
+        this.stats.socks5Connections++;
+        this.handleSOCKS5Connection(socket, firstData);
+      } else {
+        console.log('❓ Unknown protocol, treating as HTTP');
+        this.handleHTTPConnection(socket, firstData);
+      }
+    } catch (error) {
+      console.error('❌ Protocol detection error:', error);
+      socket.destroy();
+    }
+  }
+
+  handleHTTPConnection(socket, firstData) {
+    this.stats.httpRequests++;
+    
+    // Create HTTP parser
+    const req = this.parseHTTPRequest(socket, firstData);
+    const res = this.createHTTPResponse(socket);
+    
+    if (req && res) {
+      this.routeHTTPRequest(req, res);
+    }
+  }
+
+  parseHTTPRequest(socket, firstData) {
+    try {
+      // Simple HTTP request parsing
+      const lines = firstData.toString().split('\r\n');
+      const requestLine = lines[0].split(' ');
+      const method = requestLine[0];
+      const url = requestLine[1];
+      const version = requestLine[2];
+
+      // Parse headers
+      const headers = {};
+      for (let i = 1; i < lines.length; i++) {
+        if (lines[i] === '') break;
+        const [key, value] = lines[i].split(': ');
+        if (key && value) {
+          headers[key.toLowerCase()] = value;
+        }
+      }
+
+      return {
+        method,
+        url,
+        version,
+        headers,
+        socket
+      };
+    } catch (error) {
+      console.error('❌ HTTP parsing error:', error);
+      return null;
+    }
+  }
+
+  createHTTPResponse(socket) {
+    return {
+      socket,
+      headersSent: false,
+      statusCode: 200,
+      headers: {},
       
-      // Handle OPTIONS preflight
+      setHeader(name, value) {
+        this.headers[name.toLowerCase()] = value;
+      },
+      
+      writeHead(statusCode, headers) {
+        this.statusCode = statusCode;
+        if (headers) {
+          Object.assign(this.headers, headers);
+        }
+        this.sendHeaders();
+      },
+      
+      sendHeaders() {
+        if (this.headersSent) return;
+        
+        let response = `HTTP/1.1 ${this.statusCode} ${this.getStatusText()}\r\n`;
+        for (const [key, value] of Object.entries(this.headers)) {
+          response += `${key}: ${value}\r\n`;
+        }
+        response += '\r\n';
+        
+        this.socket.write(response);
+        this.headersSent = true;
+      },
+      
+      end(data) {
+        if (!this.headersSent) {
+          this.sendHeaders();
+        }
+        if (data) {
+          this.socket.write(data);
+        }
+        this.socket.end();
+      },
+      
+      write(data) {
+        if (!this.headersSent) {
+          this.sendHeaders();
+        }
+        this.socket.write(data);
+      },
+      
+      getStatusText() {
+        const statusTexts = {
+          200: 'OK',
+          400: 'Bad Request',
+          404: 'Not Found',
+          500: 'Internal Server Error',
+          502: 'Bad Gateway'
+        };
+        return statusTexts[this.statusCode] || 'Unknown';
+      }
+    };
+  }
+
+  routeHTTPRequest(req, res) {
+    try {
+      // Add CORS headers
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, CONNECT');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Target-URL');
+      res.setHeader('Server', 'Unified-Proxy/1.0');
+
+      // Handle OPTIONS
       if (req.method === 'OPTIONS') {
         res.writeHead(200);
         res.end();
         return;
       }
 
-      // Route requests to appropriate handlers
-      this.routeRequest(req, res);
-    });
+      // Handle CONNECT method
+      if (req.method === 'CONNECT') {
+        this.handleHTTPConnect(req, res);
+        return;
+      }
 
-    // Handle CONNECT method for HTTPS tunneling
-    this.httpServer.on('connect', (req, clientSocket, head) => {
-      this.handleHTTPConnectTunnel(req, clientSocket, head);
-    });
-
-    // Error handling
-    this.httpServer.on('error', (err) => {
-      console.error('❌ HTTP Server error:', err);
-      this.stats.errors++;
-    });
-
-    // Start HTTP server
-    this.httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
-      console.log(`🌐 HTTP Proxy Server running on port ${HTTP_PORT}`);
-    });
-  }
-
-  startSOCKS5Server() {
-    this.socks5Server = net.createServer((clientSocket) => {
-      console.log('🧦 New SOCKS5 connection from:', clientSocket.remoteAddress);
-      this.stats.socks5Connections++;
-      this.connections.add(clientSocket);
+      // Route based on path
+      const parsedUrl = url.parse(req.url, true);
       
-      clientSocket.on('close', () => {
-        this.connections.delete(clientSocket);
-      });
-
-      this.handleSOCKS5Connection(clientSocket);
-    });
-
-    this.socks5Server.on('error', (err) => {
-      console.error('❌ SOCKS5 Server error:', err);
-      this.stats.errors++;
-    });
-
-    // Start SOCKS5 server
-    this.socks5Server.listen(SOCKS5_PORT, '0.0.0.0', () => {
-      console.log(`🧦 SOCKS5 Proxy Server running on port ${SOCKS5_PORT}`);
-      console.log(`📱 Perfect for Telegram and other apps!`);
-      this.printStartupInfo();
-    });
-  }
-
-  printStartupInfo() {
-    console.log(`\n🚀 Hybrid Proxy Server Started Successfully!`);
-    console.log(`📍 HTTP Proxy: Port ${HTTP_PORT}`);
-    console.log(`🧦 SOCKS5 Proxy: Port ${SOCKS5_PORT}`);
-    console.log(`🌍 Environment: ${NODE_ENV}`);
-    console.log(`⏰ Started: ${new Date().toISOString()}`);
-    console.log(`🔗 Features: HTTP, HTTPS, CONNECT, SOCKS5, API`);
-    console.log(`📊 Health Endpoint: http://localhost:${HTTP_PORT}/health`);
-    console.log(`📱 Telegram Config: SOCKS5, Port ${SOCKS5_PORT}, No Auth`);
-  }
-
-  // HTTP Proxy Methods (existing code)
-  addCorsHeaders(res) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, CONNECT');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Target-URL, Proxy-Authorization');
-    res.setHeader('Access-Control-Max-Age', '86400');
-    res.setHeader('Server', 'Hybrid-Proxy/1.0');
-  }
-
-  routeRequest(req, res) {
-    const parsedUrl = url.parse(req.url, true);
-    
-    try {
       switch (parsedUrl.pathname) {
         case '/':
           this.handleRoot(req, res);
@@ -146,7 +252,6 @@ class HybridProxyServer {
           this.handleStats(req, res);
           break;
         default:
-          // Traditional HTTP proxy (full URL in request)
           if (req.url.startsWith('http://') || req.url.startsWith('https://')) {
             this.handleHTTPProxy(req, res);
           } else {
@@ -154,7 +259,7 @@ class HybridProxyServer {
           }
       }
     } catch (error) {
-      console.error('❌ Request routing error:', error);
+      console.error('❌ HTTP routing error:', error);
       this.handleError(res, error);
     }
   }
@@ -162,54 +267,46 @@ class HybridProxyServer {
   handleRoot(req, res) {
     const uptime = Math.floor((Date.now() - this.stats.startTime) / 1000);
     const info = `
-🚀 Hybrid HTTP + SOCKS5 Proxy Server
+🚀 Unified HTTP + SOCKS5 Proxy Server
 
-📍 Server: ${req.headers.host}
-🌐 HTTP Proxy: Port ${HTTP_PORT} (API, CONNECT, Traditional)
-🧦 SOCKS5 Proxy: Port ${SOCKS5_PORT} (TCP Tunneling)
-📊 Uptime: ${uptime} seconds
+📍 Server: ${req.headers.host || 'localhost'}
+📊 Port: ${PORT} (Auto-detect HTTP/SOCKS5)
+⏰ Uptime: ${uptime} seconds
 🌍 Environment: ${NODE_ENV}
 
 📱 PROXY CONFIGURATIONS:
 
    🌐 HTTP Proxy (Web, API, cURL):
-   Host: ${req.headers.host}
-   Port: ${HTTP_PORT}
+   Host: ${req.headers.host || 'localhost'}
+   Port: ${PORT}
    Type: HTTP/HTTPS
    
    🧦 SOCKS5 Proxy (Telegram, Apps):
-   Host: ${req.headers.host}
-   Port: ${SOCKS5_PORT}
+   Host: ${req.headers.host || 'localhost'}
+   Port: ${PORT}
    Type: SOCKS5
    Authentication: ${this.socks5Auth ? 'Username/Password' : 'None'}
 
 🔧 USAGE EXAMPLES:
 
    💻 HTTP Proxy:
-   curl -x ${req.headers.host}:${HTTP_PORT} http://httpbin.org/ip
-   curl -x ${req.headers.host}:${HTTP_PORT} https://www.google.com
+   curl -x ${req.headers.host || 'localhost'}:${PORT} http://httpbin.org/ip
    
    🧦 SOCKS5 Proxy:
-   curl --socks5 ${req.headers.host}:${SOCKS5_PORT} https://httpbin.org/ip
+   curl --socks5 ${req.headers.host || 'localhost'}:${PORT} https://httpbin.org/ip
    
    📱 Telegram Config:
    Type: SOCKS5
-   Server: ${req.headers.host}
-   Port: ${SOCKS5_PORT}
+   Server: ${req.headers.host || 'localhost'}
+   Port: ${PORT}
    Username: ${this.socks5Auth ? this.socks5Auth.username : '(none)'}
    Password: ${this.socks5Auth ? '••••••••' : '(none)'}
    
    🔌 API Endpoint:
-   curl "http://${req.headers.host}:${HTTP_PORT}/proxy" \\
+   curl "http://${req.headers.host || 'localhost'}:${PORT}/proxy" \\
      -H "X-Target-URL: https://httpbin.org/ip"
 
-📊 ENDPOINTS:
-   🏠 Info: /
-   ❤️ Health: /health  
-   🔌 API Proxy: /proxy
-   📈 Stats: /stats
-
-📈 CURRENT STATS:
+📊 CURRENT STATS:
    📤 HTTP Requests: ${this.stats.httpRequests}
    🧦 SOCKS5 Connections: ${this.stats.socks5Connections}
    🔗 CONNECT Tunnels: ${this.stats.connectTunnels}
@@ -220,7 +317,8 @@ class HybridProxyServer {
 🔄 Status: Online and Ready
     `;
 
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.setHeader('Content-Type', 'text/plain');
+    res.writeHead(200);
     res.end(info);
   }
 
@@ -230,17 +328,10 @@ class HybridProxyServer {
       status: 'healthy',
       timestamp: new Date().toISOString(),
       uptime_seconds: Math.floor(uptime / 1000),
-      uptime_human: this.formatUptime(uptime),
       server: {
-        type: 'Hybrid HTTP + SOCKS5 Proxy',
+        type: 'Unified HTTP + SOCKS5 Proxy',
         version: '1.0.0',
-        node_version: process.version,
-        platform: process.platform,
-        memory: process.memoryUsage(),
-        ports: {
-          http: HTTP_PORT,
-          socks5: SOCKS5_PORT
-        },
+        port: PORT,
         environment: NODE_ENV
       },
       features: {
@@ -248,192 +339,145 @@ class HybridProxyServer {
         https_proxy: true,
         connect_method: true,
         socks5_proxy: true,
-        tcp_tunneling: true,
         api_proxy: true,
-        cors_enabled: true,
-        telegram_support: true
+        telegram_support: true,
+        protocol_detection: true
       },
       statistics: {
         http_requests: this.stats.httpRequests,
         socks5_connections: this.stats.socks5Connections,
         connect_tunnels: this.stats.connectTunnels,
         active_connections: this.connections.size,
-        error_count: this.stats.errors,
-        requests_per_minute: Math.round(this.stats.httpRequests / (uptime / 60000))
-      },
-      authentication: {
-        socks5_auth_enabled: !!this.socks5Auth,
-        socks5_username: this.socks5Auth ? this.socks5Auth.username : null
+        error_count: this.stats.errors
       }
     };
 
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(200);
     res.end(JSON.stringify(health, null, 2));
   }
 
-  // HTTP Proxy methods (keeping existing implementation)
   handleAPIProxy(req, res) {
-    try {
-      const targetUrl = req.headers['x-target-url'] || 
-                       url.parse(req.url, true).query.url;
+    const targetUrl = req.headers['x-target-url'] || 
+                     url.parse(req.url, true).query.url;
 
-      if (!targetUrl) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          error: 'Missing target URL',
-          usage: 'Add X-Target-URL header or ?url= parameter'
-        }));
-        return;
-      }
-
-      if (!this.isValidUrl(targetUrl)) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          error: 'Invalid URL format'
-        }));
-        return;
-      }
-
-      console.log(`📤 API Proxy: ${req.method} ${targetUrl}`);
-      this.proxyRequest(targetUrl, req, res, 'API');
-    } catch (error) {
-      console.error('❌ API Proxy Error:', error);
-      this.handleError(res, error);
+    if (!targetUrl) {
+      res.setHeader('Content-Type', 'application/json');
+      res.writeHead(400);
+      res.end(JSON.stringify({
+        error: 'Missing target URL',
+        usage: 'Add X-Target-URL header or ?url= parameter'
+      }));
+      return;
     }
+
+    console.log(`📤 API Proxy: ${req.method} ${targetUrl}`);
+    this.proxyRequest(targetUrl, req, res);
   }
 
   handleHTTPProxy(req, res) {
-    try {
-      const targetUrl = req.url;
-      console.log(`📤 HTTP Proxy: ${req.method} ${targetUrl}`);
-      this.proxyRequest(targetUrl, req, res, 'HTTP');
-    } catch (error) {
-      console.error('❌ HTTP Proxy Error:', error);
-      this.handleError(res, error);
-    }
+    console.log(`📤 HTTP Proxy: ${req.method} ${req.url}`);
+    this.proxyRequest(req.url, req, res);
   }
 
-  proxyRequest(targetUrl, req, res, type) {
+  proxyRequest(targetUrl, req, res) {
     try {
       const parsedUrl = url.parse(targetUrl);
       const isHttps = parsedUrl.protocol === 'https:';
-      const targetPort = parsedUrl.port || (isHttps ? 443 : 80);
+      const protocol = isHttps ? https : http;
 
       const options = {
         hostname: parsedUrl.hostname,
-        port: targetPort,
+        port: parsedUrl.port || (isHttps ? 443 : 80),
         path: parsedUrl.path,
         method: req.method,
-        headers: { ...req.headers },
-        timeout: 30000
+        headers: { ...req.headers }
       };
 
       delete options.headers['host'];
       delete options.headers['x-target-url'];
-      delete options.headers['proxy-connection'];
-      
       options.headers['host'] = parsedUrl.host;
-      options.headers['user-agent'] = options.headers['user-agent'] || 
-        'Mozilla/5.0 (compatible; HybridProxy/1.0)';
 
-      const protocol = isHttps ? https : http;
       const proxyReq = protocol.request(options, (proxyRes) => {
-        res.writeHead(proxyRes.statusCode, {
-          ...proxyRes.headers,
-          'X-Proxy-Via': `HTTP-${type}`,
-          'X-Proxy-Server': 'Hybrid-Proxy/1.0'
-        });
-        
-        proxyRes.pipe(res);
-      });
-
-      proxyReq.setTimeout(30000, () => {
-        proxyReq.destroy();
-        res.writeHead(504, { 'Content-Type': 'text/plain' });
-        res.end('Gateway Timeout');
+        res.writeHead(proxyRes.statusCode, proxyRes.headers);
+        proxyRes.pipe(res.socket);
       });
 
       proxyReq.on('error', (err) => {
-        console.error(`❌ ${type} Proxy Error:`, err.message);
-        if (!res.headersSent) {
-          res.writeHead(502, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Bad Gateway', message: err.message }));
-        }
+        console.error('❌ Proxy error:', err.message);
+        res.writeHead(502);
+        res.end('Bad Gateway');
       });
 
-      req.pipe(proxyReq);
+      proxyReq.end();
     } catch (error) {
-      console.error(`❌ ${type} Request Error:`, error);
-      this.handleError(res, error);
+      console.error('❌ Proxy request error:', error);
+      res.writeHead(500);
+      res.end('Internal Server Error');
     }
   }
 
-  handleHTTPConnectTunnel(req, clientSocket, head) {
+  handleHTTPConnect(req, res) {
     try {
       const [targetHost, targetPort] = req.url.split(':');
       const port = parseInt(targetPort) || 443;
 
-      console.log(`🔗 HTTP CONNECT Tunnel: ${targetHost}:${port}`);
+      console.log(`🔗 HTTP CONNECT: ${targetHost}:${port}`);
       this.stats.connectTunnels++;
-      this.connections.add(clientSocket);
 
-      const serverSocket = net.createConnection(port, targetHost, () => {
-        clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-        console.log(`✅ HTTP Tunnel established: ${targetHost}:${port}`);
+      const targetSocket = net.createConnection(port, targetHost, () => {
+        res.socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+        console.log(`✅ HTTP CONNECT established: ${targetHost}:${port}`);
 
-        serverSocket.pipe(clientSocket, { end: false });
-        clientSocket.pipe(serverSocket, { end: false });
+        targetSocket.pipe(res.socket);
+        res.socket.pipe(targetSocket);
       });
 
-      serverSocket.on('error', (err) => {
-        console.error(`❌ HTTP CONNECT Error (${targetHost}:${port}):`, err.message);
-        clientSocket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
-        clientSocket.destroy();
-        this.connections.delete(clientSocket);
-        this.stats.errors++;
-      });
-
-      clientSocket.on('close', () => {
-        serverSocket.destroy();
-        this.connections.delete(clientSocket);
+      targetSocket.on('error', (err) => {
+        console.error(`❌ CONNECT error: ${err.message}`);
+        res.socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+        res.socket.destroy();
       });
 
     } catch (error) {
-      console.error('❌ HTTP CONNECT Error:', error);
-      clientSocket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
-      clientSocket.destroy();
-      this.stats.errors++;
+      console.error('❌ CONNECT request error:', error);
+      res.socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+      res.socket.destroy();
     }
   }
 
-  // SOCKS5 Proxy Methods
-  handleSOCKS5Connection(clientSocket) {
+  // SOCKS5 Implementation
+  handleSOCKS5Connection(socket, firstData) {
     let step = 'handshake';
     
-    clientSocket.on('data', (data) => {
+    // Process first data
+    try {
+      this.handleSOCKS5Handshake(socket, firstData);
+      step = this.socks5Auth ? 'auth' : 'request';
+    } catch (error) {
+      console.error('❌ SOCKS5 handshake error:', error);
+      socket.destroy();
+      return;
+    }
+
+    // Handle subsequent data
+    socket.on('data', (data) => {
       try {
-        if (step === 'handshake') {
-          this.handleSOCKS5Handshake(clientSocket, data);
-          step = this.socks5Auth ? 'auth' : 'request';
-        } else if (step === 'auth') {
-          this.handleSOCKS5Authentication(clientSocket, data);
+        if (step === 'auth') {
+          this.handleSOCKS5Authentication(socket, data);
           step = 'request';
         } else if (step === 'request') {
-          this.handleSOCKS5ConnectRequest(clientSocket, data);
+          this.handleSOCKS5Request(socket, data);
           step = 'tunnel';
         }
       } catch (error) {
-        console.error('❌ SOCKS5 Error:', error);
-        clientSocket.destroy();
+        console.error('❌ SOCKS5 error:', error);
+        socket.destroy();
       }
-    });
-
-    clientSocket.on('error', (err) => {
-      console.error('❌ SOCKS5 client error:', err.message);
     });
   }
 
-  handleSOCKS5Handshake(clientSocket, data) {
+  handleSOCKS5Handshake(socket, data) {
     if (data.length < 2) {
       throw new Error('Invalid SOCKS5 handshake');
     }
@@ -449,7 +493,7 @@ class HybridProxyServer {
       methods.push(data[i]);
     }
 
-    console.log('🤝 SOCKS5 Handshake, methods:', methods);
+    console.log('🤝 SOCKS5 handshake, methods:', methods);
 
     let chosenMethod;
     if (this.socks5Auth) {
@@ -463,37 +507,34 @@ class HybridProxyServer {
     }
 
     const response = Buffer.from([SOCKS_VERSION, chosenMethod]);
-    clientSocket.write(response);
+    socket.write(response);
 
     if (chosenMethod === 0xFF) {
       throw new Error('No acceptable authentication methods');
     }
   }
 
-  handleSOCKS5Authentication(clientSocket, data) {
-    const version = data[0];
-    const usernameLength = data[1];
-    const username = data.slice(2, 2 + usernameLength).toString();
-    const passwordLength = data[2 + usernameLength];
-    const password = data.slice(3 + usernameLength, 3 + usernameLength + passwordLength).toString();
+  handleSOCKS5Authentication(socket, data) {
+    if (!this.socks5Auth) return;
 
-    console.log(`🔐 SOCKS5 Authentication: ${username}`);
+    const username = data.slice(2, 2 + data[1]).toString();
+    const passwordLength = data[2 + data[1]];
+    const password = data.slice(3 + data[1], 3 + data[1] + passwordLength).toString();
 
-    const success = this.socks5Auth && 
-                   username === this.socks5Auth.username && 
+    const success = username === this.socks5Auth.username && 
                    password === this.socks5Auth.password;
 
     const response = Buffer.from([1, success ? 0 : 1]);
-    clientSocket.write(response);
+    socket.write(response);
 
     if (!success) {
-      throw new Error('SOCKS5 Authentication failed');
+      throw new Error('Authentication failed');
     }
   }
 
-  handleSOCKS5ConnectRequest(clientSocket, data) {
+  handleSOCKS5Request(socket, data) {
     if (data.length < 4) {
-      throw new Error('Invalid SOCKS5 connect request');
+      throw new Error('Invalid SOCKS5 request');
     }
 
     const version = data[0];
@@ -501,8 +542,8 @@ class HybridProxyServer {
     const addressType = data[3];
 
     if (version !== SOCKS_VERSION || command !== COMMANDS.CONNECT) {
-      this.sendSOCKS5ErrorResponse(clientSocket, 0x07);
-      throw new Error('Unsupported SOCKS5 command');
+      this.sendSOCKS5Error(socket, 0x07);
+      throw new Error('Unsupported command');
     }
 
     let targetHost, targetPort, offset = 4;
@@ -515,37 +556,35 @@ class HybridProxyServer {
       targetHost = data.slice(5, 5 + domainLength).toString();
       offset = 5 + domainLength;
     } else {
-      this.sendSOCKS5ErrorResponse(clientSocket, 0x08);
+      this.sendSOCKS5Error(socket, 0x08);
       throw new Error('Unsupported address type');
     }
 
     targetPort = (data[offset] << 8) | data[offset + 1];
 
     console.log(`🎯 SOCKS5 CONNECT: ${targetHost}:${targetPort}`);
-
-    this.createSOCKS5Tunnel(clientSocket, targetHost, targetPort);
+    this.createSOCKS5Tunnel(socket, targetHost, targetPort);
   }
 
   createSOCKS5Tunnel(clientSocket, targetHost, targetPort) {
     const targetSocket = net.createConnection(targetPort, targetHost);
 
     targetSocket.on('connect', () => {
-      console.log(`✅ SOCKS5 Tunnel established: ${targetHost}:${targetPort}`);
+      console.log(`✅ SOCKS5 tunnel established: ${targetHost}:${targetPort}`);
       
       const response = Buffer.from([
         SOCKS_VERSION, 0x00, 0x00, ADDRESS_TYPES.IPv4,
-        0x00, 0x00, 0x00, 0x00, // Bind address (0.0.0.0)
-        0x00, 0x00 // Bind port (0)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00
       ]);
       clientSocket.write(response);
 
-      targetSocket.pipe(clientSocket, { end: false });
-      clientSocket.pipe(targetSocket, { end: false });
+      targetSocket.pipe(clientSocket);
+      clientSocket.pipe(targetSocket);
     });
 
     targetSocket.on('error', (err) => {
-      console.error(`❌ SOCKS5 Target Error (${targetHost}:${targetPort}):`, err.message);
-      this.sendSOCKS5ErrorResponse(clientSocket, 0x05);
+      console.error(`❌ SOCKS5 target error: ${err.message}`);
+      this.sendSOCKS5Error(clientSocket, 0x05);
       clientSocket.destroy();
     });
 
@@ -558,108 +597,74 @@ class HybridProxyServer {
     });
   }
 
-  sendSOCKS5ErrorResponse(clientSocket, errorCode) {
+  sendSOCKS5Error(socket, errorCode) {
     const response = Buffer.from([
       SOCKS_VERSION, errorCode, 0x00, ADDRESS_TYPES.IPv4,
-      0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00
     ]);
-    clientSocket.write(response);
+    socket.write(response);
   }
 
   // Utility methods
   handleStats(req, res) {
-    const uptime = Date.now() - this.stats.startTime;
     const stats = {
-      server: 'Hybrid HTTP + SOCKS5 Proxy',
-      uptime_ms: uptime,
-      uptime_human: this.formatUptime(uptime),
-      statistics: {
-        http_requests: this.stats.httpRequests,
-        socks5_connections: this.stats.socks5Connections,
-        connect_tunnels: this.stats.connectTunnels,
-        active_connections: this.connections.size,
-        error_count: this.stats.errors
-      }
+      server: 'Unified HTTP + SOCKS5 Proxy',
+      uptime_ms: Date.now() - this.stats.startTime,
+      statistics: this.stats,
+      active_connections: this.connections.size
     };
 
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(200);
     res.end(JSON.stringify(stats, null, 2));
   }
 
   handle404(req, res) {
-    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(404);
     res.end(JSON.stringify({
       error: 'Not Found',
       available_endpoints: ['/', '/health', '/proxy', '/stats'],
       proxy_types: ['HTTP', 'SOCKS5'],
-      ports: { http: HTTP_PORT, socks5: SOCKS5_PORT }
+      port: PORT
     }));
   }
 
   handleError(res, error) {
     this.stats.errors++;
-    if (!res.headersSent) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        error: 'Internal Server Error',
-        message: error.message
-      }));
-    }
-  }
-
-  isValidUrl(string) {
-    try {
-      const parsed = new URL(string);
-      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-    } catch (_) {
-      return false;
-    }
-  }
-
-  formatUptime(ms) {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-
-    if (days > 0) return `${days}d ${hours % 24}h ${minutes % 60}m`;
-    if (hours > 0) return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-    return `${seconds}s`;
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(500);
+    res.end(JSON.stringify({
+      error: 'Internal Server Error',
+      message: error.message
+    }));
   }
 
   stop() {
-    console.log('🛑 Shutting down Hybrid Proxy Server...');
+    console.log('🛑 Shutting down server...');
     
     this.connections.forEach(socket => {
       socket.destroy();
     });
     this.connections.clear();
 
-    if (this.httpServer) {
-      this.httpServer.close(() => {
-        console.log('✅ HTTP server stopped');
-      });
-    }
-
-    if (this.socks5Server) {
-      this.socks5Server.close(() => {
-        console.log('✅ SOCKS5 server stopped');
+    if (this.server) {
+      this.server.close(() => {
+        console.log('✅ Server stopped');
       });
     }
   }
 }
 
-// Create and start hybrid server
-const proxy = new HybridProxyServer();
+// Create and start server
+const proxy = new UnifiedProxyServer();
 
 // Optional: Enable SOCKS5 authentication
 // proxy.socks5Auth = { username: 'telegram', password: 'secure123' };
 
 proxy.start();
 
-// Graceful shutdown handlers
+// Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n🛑 Received SIGINT');
   proxy.stop();
@@ -678,4 +683,4 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-console.log('🎯 Hybrid Proxy Server initialized - HTTP + SOCKS5 support!');
+console.log('🎯 Unified Proxy Server - Ready for HTTP and SOCKS5!');
