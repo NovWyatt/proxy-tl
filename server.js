@@ -127,7 +127,7 @@ class RenderTCPProxy {
    HTTPS Proxy: ${req.headers.host}:443
    
    🔌 API Endpoint:
-   curl "${req.protocol}://${req.headers.host}/proxy" \\
+   curl "https://${req.headers.host}/proxy" \\
      -H "X-Target-URL: https://httpbin.org/ip"
 
 📊 ENDPOINTS:
