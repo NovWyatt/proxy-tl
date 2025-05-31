@@ -4,14 +4,11 @@ FROM node:18-alpine
 # Set working directory in container
 WORKDIR /app
 
-# Copy package files first (for better caching)
-COPY package*.json ./
+# Copy all files
+COPY . .
 
-# Install dependencies
-RUN npm ci --only=production && npm cache clean --force
-
-# Copy application code
-COPY server.js ./
+# Install dependencies (since package.json has no dependencies, this is fast)
+RUN npm install --only=production
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
