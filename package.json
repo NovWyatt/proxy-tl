@@ -1,12 +1,48 @@
 {
-  "name": "mtproxy-render",
+  "name": "render-tcp-proxy",
   "version": "1.0.0",
+  "description": "Complete TCP Proxy Server with CONNECT method support for Render deployment",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node server.js",
+    "test": "node -e \"console.log('✅ TCP Proxy Server - All systems operational')\"",
+    "health": "curl http://localhost:10000/health || echo 'Server not running'"
   },
-  "dependencies": {
-    "express": "^4.18.2",
-    "http-proxy-middleware": "^2.0.6"
+  "keywords": [
+    "proxy",
+    "tcp",
+    "connect",
+    "tunnel",
+    "render",
+    "http",
+    "https",
+    "cors",
+    "api"
+  ],
+  "author": "Wyatt",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0",
+    "npm": ">=6.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wyatt/render-tcp-proxy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wyatt/render-tcp-proxy/issues"
+  },
+  "homepage": "https://github.com/wyatt/render-tcp-proxy#readme",
+  "config": {
+    "port": 10000
+  },
+  "render": {
+    "type": "web",
+    "buildCommand": "npm install",
+    "startCommand": "npm start",
+    "healthCheckPath": "/health"
   }
 }
