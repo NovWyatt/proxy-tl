@@ -1,14 +1,10 @@
 const http = require('http');
-const net = require('net');
+const https = require('https');
 const url = require('url');
 
 const PORT = process.env.PORT || 10000;
-const SECRET = process.env.SECRET || '22c63e538806b501dd6d42ff87840a49';
-const TAG = process.env.TAG || 'ee9108bcc34ba27af2299b8ce7e03626';
 
-console.log('🚀 MTProxy Server Starting...');
-console.log('📝 Secret:', SECRET);
-console.log('🏷️ Tag:', TAG);
+console.log('🚀 Simple Telegram Proxy Starting...');
 
 // Create HTTP server
 const server = http.createServer((req, res) => {
@@ -16,7 +12,7 @@ const server = http.createServer((req, res) => {
     
     // Set CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, CONNECT');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
     if (req.method === 'OPTIONS') {
@@ -26,46 +22,55 @@ const server = http.createServer((req, res) => {
     }
     
     if (parsedUrl.pathname === '/') {
-        // Health check endpoint
+        // Health check
         const response = {
-            status: 'MTProxy Server Running ✅',
+            status: 'Telegram Proxy Server Running ✅',
             port: PORT,
-            secret: SECRET,
-            tag: TAG,
             server: req.headers.host,
             timestamp: new Date().toISOString(),
-            instructions: {
-                telegram_setup: {
-                    server: req.headers.host.replace(':' + PORT, ''),
-                    port: 443,
-                    secret: SECRET,
-                    type: 'MTProto'
-                }
-            }
-        };
-        
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(response, null, 2));
-        
-    } else if (parsedUrl.pathname === '/proxy-info') {
-        // MTProxy info endpoint
-        const host = req.headers.host.replace(':' + PORT, '');
-        const response = {
-            server: host,
-            port: 443,
-            secret: SECRET,
-            tag: TAG,
-            telegram_link: `tg://proxy?server=${host}&port=443&secret=${SECRET}`,
-            instructions: {
-                server: host,
+            setup_instructions: {
+                telegram_desktop: 'Settings → Advanced → Connection type → Use custom proxy → HTTP Proxy',
+                telegram_mobile: 'Settings → Data and Storage → Proxy Settings → Add Proxy → HTTP',
+                server: req.headers.host.replace(':' + PORT, ''),
                 port: 443,
-                secret: SECRET,
-                type: 'MTProto'
+                username: '',
+                password: '',
+                type: 'HTTP Proxy'
             }
         };
         
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(response, null, 2));
+        
+    } else if (parsedUrl.pathname.startsWith('/telegram/')) {
+        // Proxy to Telegram API
+        const telegramPath = req.url.replace('/telegram', '');
+        const telegramUrl = `https://api.telegram.org${telegramPath}`;
+        const parsedTgUrl = url.parse(telegramUrl);
+        
+        const options = {
+            hostname: parsedTgUrl.hostname,
+            port: 443,
+            path: parsedTgUrl.path,
+            method: req.method,
+            headers: {
+                ...req.headers,
+                host: parsedTgUrl.hostname
+            }
+        };
+        
+        const proxyReq = https.request(options, (proxyRes) => {
+            res.writeHead(proxyRes.statusCode, proxyRes.headers);
+            proxyRes.pipe(res);
+        });
+        
+        proxyReq.on('error', (err) => {
+            console.error('Proxy error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Proxy error' }));
+        });
+        
+        req.pipe(proxyReq);
         
     } else {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -73,95 +78,20 @@ const server = http.createServer((req, res) => {
     }
 });
 
-// Handle CONNECT requests for MTProxy
-server.on('connect', (req, clientSocket, head) => {
-    console.log('🔗 CONNECT request received:', req.url);
-    
-    // Parse target from CONNECT request
-    const [host, port] = req.url.split(':');
-    
-    // List of allowed Telegram servers
-    const telegramHosts = [
-        '149.154.175.50',
-        '149.154.167.51', 
-        '149.154.175.100',
-        '149.154.167.91',
-        '149.154.171.5',
-        '91.108.56.0',
-        '91.108.4.0',
-        '149.154.160.0',
-        '149.154.164.0'
-    ];
-    
-    // Check if connecting to Telegram servers
-    const isTelegramHost = telegramHosts.some(tgHost => 
-        host.includes(tgHost.split('.').slice(0, 3).join('.'))
-    );
-    
-    if (isTelegramHost || host.includes('telegram') || port === '443') {
-        console.log(`✅ Connecting to: ${host}:${port}`);
-        
-        // Create connection to Telegram server
-        const serverSocket = net.connect(port || 443, host, () => {
-            console.log(`🎯 Connected to ${host}:${port}`);
-            
-            // Send 200 Connection Established
-            clientSocket.write('HTTP/1.1 200 Connection Established\r\n' +
-                             'Proxy-agent: MTProxy-Server\r\n' +
-                             '\r\n');
-            
-            // Pipe data between client and server
-            serverSocket.write(head);
-            serverSocket.pipe(clientSocket);
-            clientSocket.pipe(serverSocket);
-        });
-        
-        serverSocket.on('error', (err) => {
-            console.error('❌ Server socket error:', err.message);
-            clientSocket.end('HTTP/1.1 500 Connection Failed\r\n\r\n');
-        });
-        
-        clientSocket.on('error', (err) => {
-            console.error('❌ Client socket error:', err.message);
-            serverSocket.destroy();
-        });
-        
-        serverSocket.on('end', () => {
-            clientSocket.end();
-        });
-        
-        clientSocket.on('end', () => {
-            serverSocket.end();
-        });
-        
-    } else {
-        console.log(`❌ Blocked connection to: ${host}:${port}`);
-        clientSocket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
-    }
-});
-
-// Handle regular HTTP requests
-server.on('request', app);
-
 // Start server
 server.listen(PORT, () => {
-    console.log(`🌐 MTProxy Server running on port ${PORT}`);
+    console.log(`🌐 Server running on port ${PORT}`);
     console.log(`📊 Health check: http://localhost:${PORT}/`);
-    console.log(`🔧 Proxy info: http://localhost:${PORT}/proxy-info`);
-    console.log(`🔗 CONNECT method enabled for MTProxy`);
+    console.log(`🔧 Ready for HTTP proxy connections`);
 });
 
-// Handle graceful shutdown
+// Graceful shutdown
 process.on('SIGTERM', () => {
-    console.log('🛑 SIGTERM received, shutting down gracefully');
-    server.close(() => {
-        process.exit(0);
-    });
+    console.log('🛑 Shutting down gracefully');
+    server.close(() => process.exit(0));
 });
 
 process.on('SIGINT', () => {
-    console.log('🛑 SIGINT received, shutting down gracefully');
-    server.close(() => {
-        process.exit(0);
-    });
+    console.log('🛑 Shutting down gracefully');
+    server.close(() => process.exit(0));
 });
