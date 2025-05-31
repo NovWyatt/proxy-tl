@@ -1,24 +1,11 @@
-const express = require('express');
-const { createProxyMiddleware } = require('http-proxy-middleware');
-const cors = require('cors');
-const http = require('http');
-const https = require('https');
 const net = require('net');
-const url = require('url');
+const express = require('express');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const HTTP_PORT = process.env.PORT || 10000;
+const SOCKS_PORT = 1080;
 
-// Enable CORS for all routes
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'CONNECT'],
-  allowedHeaders: '*'
-}));
-
-app.use(express.json());
-
-// Root endpoint - Show proxy info
+// Web interface
 app.get('/', (req, res) => {
   const host = req.get('host');
   
@@ -26,62 +13,49 @@ app.get('/', (req, res) => {
     <!DOCTYPE html>
     <html>
     <head>
-        <title>🌐 Telegram HTTP Proxy</title>
+        <title>🧦 SOCKS5 Proxy on Render</title>
         <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: #f8f9fa; }
-            .container { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-            .status { background: linear-gradient(135deg, #28a745, #20c997); color: white; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center; }
-            .config { background: #e7f3ff; padding: 20px; border-radius: 8px; font-family: 'Monaco', monospace; border-left: 4px solid #007bff; }
-            .warning { background: #fff3cd; color: #856404; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107; }
-            h1 { color: #343a40; margin-bottom: 10px; }
-            .badge { background: #007bff; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+            body { font-family: Arial; max-width: 600px; margin: 50px auto; padding: 20px; background: #f8f9fa; }
+            .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .status { background: #d4edda; color: #155724; padding: 15px; border-radius: 5px; margin: 20px 0; }
+            .config { background: #e7f3ff; padding: 15px; border-radius: 5px; font-family: monospace; }
+            .warning { background: #fff3cd; color: #856404; padding: 15px; border-radius: 5px; margin: 20px 0; }
+            h1 { color: #0088cc; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🌐 Telegram HTTP Proxy <span class="badge">Render.com</span></h1>
+            <h1>🧦 SOCKS5 Proxy on Render</h1>
             
             <div class="status">
-                <strong>✅ HTTP Proxy Server Online</strong><br>
-                <small>Ready for secure Telegram connections</small>
+                <strong>✅ SOCKS5 Server Online</strong><br>
+                Advanced proxy server for applications
             </div>
 
             <h3>📱 Telegram Configuration:</h3>
             <div class="config">
-                <strong>Proxy Type:</strong> HTTP<br>
+                <strong>Proxy Type:</strong> SOCKS5<br>
                 <strong>Server:</strong> ${host}<br>
-                <strong>Port:</strong> 443<br>
+                <strong>Port:</strong> ${SOCKS_PORT}<br>
                 <strong>Username:</strong> <em>(leave empty)</em><br>
-                <strong>Password:</strong> <em>(leave empty)</em><br>
-                <strong>SSL:</strong> Yes (HTTPS)
+                <strong>Password:</strong> <em>(leave empty)</em>
             </div>
 
             <div class="warning">
-                <strong>📱 How to add in Telegram:</strong><br>
-                Settings → Data and Storage → Proxy Settings → Add Proxy → HTTP
-            </div>
-
-            <h3>🔧 Technical Details:</h3>
-            <div class="config">
-                Protocol: HTTP/1.1 with CONNECT<br>
-                Encryption: TLS 1.3<br>
-                Uptime: 24/7 (750 hours/month)<br>
-                Location: Global Edge Network<br>
-                Latency: &lt;100ms average
+                <strong>⚠️ Note:</strong> SOCKS5 proxy running on port ${SOCKS_PORT}. 
+                This may work better than HTTP proxy for some applications.
             </div>
 
             <h3>🧪 Test Commands:</h3>
             <div class="config">
-                # Test basic connectivity<br>
-                curl -x https://${host}:443 https://httpbin.org/ip<br><br>
+                # Test SOCKS5 proxy<br>
+                curl --socks5 ${host}:${SOCKS_PORT} https://httpbin.org/ip<br><br>
                 
-                # Test with Telegram API<br>
-                curl -x https://${host}:443 https://api.telegram.org/bot{TOKEN}/getMe
+                # Test with authentication<br>
+                curl --socks5-hostname ${host}:${SOCKS_PORT} https://api.telegram.org
             </div>
 
-            <p style="text-align: center; margin-top: 30px;">
-                <small>⚡ Powered by Render.com - Professional HTTP Proxy</small>
-            </p>
+            <p><small>⚡ SOCKS5 Proxy powered by Render.com</small></p>
         </div>
     </body>
     </html>
@@ -90,167 +64,145 @@ app.get('/', (req, res) => {
   res.send(html);
 });
 
-// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy',
-    type: 'HTTP Proxy',
-    timestamp: new Date().toISOString(),
-    server: req.get('host'),
-    uptime: process.uptime(),
-    memory: process.memoryUsage()
+    type: 'SOCKS5 Proxy',
+    socks_port: SOCKS_PORT,
+    http_port: HTTP_PORT,
+    timestamp: new Date().toISOString()
   });
 });
 
-// Status endpoint
-app.get('/status', (req, res) => {
-  res.json({
-    proxy: 'online',
-    protocol: 'HTTP/1.1',
-    ssl: true,
-    port: PORT,
-    requests_handled: app.locals.requestCount || 0
-  });
-});
-
-// Initialize request counter
-app.locals.requestCount = 0;
-
-// Proxy middleware for all other routes
-app.use('*', (req, res, next) => {
-  // Skip health and status endpoints
-  if (req.path === '/health' || req.path === '/status' || req.path === '/') {
-    return next();
+// SOCKS5 Implementation
+class SOCKS5Server {
+  constructor(port) {
+    this.port = port;
+    this.server = net.createServer(this.handleConnection.bind(this));
   }
 
-  app.locals.requestCount = (app.locals.requestCount || 0) + 1;
+  start() {
+    this.server.listen(this.port, () => {
+      console.log(`🧦 SOCKS5 proxy listening on port ${this.port}`);
+    });
 
-  // Extract target URL from request
-  let targetUrl;
-  
-  if (req.headers['proxy-target']) {
-    targetUrl = req.headers['proxy-target'];
-  } else if (req.url.startsWith('http')) {
-    targetUrl = req.url;
-  } else {
-    return res.status(400).json({ 
-      error: 'Invalid proxy request',
-      message: 'Target URL not specified'
+    this.server.on('error', (err) => {
+      console.error('SOCKS5 server error:', err);
     });
   }
 
-  try {
-    const urlParts = url.parse(targetUrl);
-    const isHttps = urlParts.protocol === 'https:';
-    const targetPort = urlParts.port || (isHttps ? 443 : 80);
+  handleConnection(clientSocket) {
+    console.log('New SOCKS5 connection from:', clientSocket.remoteAddress);
     
-    const options = {
-      hostname: urlParts.hostname,
-      port: targetPort,
-      path: urlParts.path,
-      method: req.method,
-      headers: {
-        ...req.headers,
-        'host': urlParts.hostname
+    clientSocket.on('data', (data) => {
+      if (data.length < 2) return;
+
+      // SOCKS5 greeting
+      if (data[0] === 0x05) {
+        if (data[1] === 0x01 && data[2] === 0x00) {
+          // No authentication required
+          clientSocket.write(Buffer.from([0x05, 0x00]));
+        } else {
+          clientSocket.end();
+        }
+        return;
       }
-    };
 
-    // Remove proxy-specific headers
-    delete options.headers['proxy-target'];
-    delete options.headers['x-forwarded-for'];
-    delete options.headers['x-forwarded-proto'];
-    delete options.headers['x-forwarded-host'];
-
-    const protocol = isHttps ? https : http;
-    
-    const proxyReq = protocol.request(options, (proxyRes) => {
-      // Set CORS headers
-      res.set({
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': '*'
-      });
-      
-      // Copy response headers and status
-      res.status(proxyRes.statusCode);
-      Object.keys(proxyRes.headers).forEach(header => {
-        res.set(header, proxyRes.headers[header]);
-      });
-      
-      // Pipe response
-      proxyRes.pipe(res);
+      // SOCKS5 request
+      if (data[0] === 0x05 && data[1] === 0x01) {
+        this.handleSOCKSRequest(clientSocket, data);
+      }
     });
 
-    proxyReq.on('error', (err) => {
-      console.error('Proxy request error:', err);
-      res.status(500).json({ 
-        error: 'Proxy request failed',
-        message: err.message 
-      });
-    });
-
-    // Handle request timeout
-    proxyReq.setTimeout(30000, () => {
-      proxyReq.destroy();
-      res.status(504).json({ error: 'Gateway timeout' });
-    });
-
-    // Send request body for POST/PUT requests
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      req.pipe(proxyReq);
-    } else {
-      proxyReq.end();
-    }
-    
-  } catch (error) {
-    console.error('Request processing error:', error);
-    res.status(500).json({ 
-      error: 'Request processing failed',
-      message: error.message 
+    clientSocket.on('error', (err) => {
+      console.error('Client socket error:', err);
     });
   }
-});
 
-// Create HTTP server
-const server = http.createServer(app);
+  handleSOCKSRequest(clientSocket, data) {
+    try {
+      let offset = 4; // Skip VER, CMD, RSV, ATYP
+      
+      let targetHost;
+      let targetPort;
 
-// Handle CONNECT method for HTTPS tunneling
-server.on('connect', (req, clientSocket, head) => {
-  console.log('CONNECT request to:', req.url);
-  
-  const { hostname, port } = url.parse(`http://${req.url}`);
-  const targetPort = port || 443;
-  
-  // Create connection to target server
-  const serverSocket = net.connect(targetPort, hostname, () => {
-    clientSocket.write('HTTP/1.1 200 Connection Established\r\n' +
-                      'Proxy-agent: Render-HTTP-Proxy/1.0\r\n' +
-                      '\r\n');
-    serverSocket.write(head);
-    serverSocket.pipe(clientSocket);
-    clientSocket.pipe(serverSocket);
-  });
+      // Parse address type
+      const atyp = data[3];
+      
+      if (atyp === 0x01) { // IPv4
+        targetHost = `${data[4]}.${data[5]}.${data[6]}.${data[7]}`;
+        offset = 8;
+      } else if (atyp === 0x03) { // Domain name
+        const domainLength = data[4];
+        targetHost = data.slice(5, 5 + domainLength).toString();
+        offset = 5 + domainLength;
+      } else {
+        // Unsupported address type
+        this.sendSOCKSResponse(clientSocket, 0x08);
+        return;
+      }
 
-  serverSocket.on('error', (err) => {
-    console.error('Server socket error:', err);
-    clientSocket.write('HTTP/1.1 500 Connection Error\r\n\r\n');
-    clientSocket.end();
-  });
+      targetPort = (data[offset] << 8) + data[offset + 1];
 
-  clientSocket.on('error', (err) => {
-    console.error('Client socket error:', err);
-    serverSocket.destroy();
-  });
-});
+      console.log(`SOCKS5 connecting to: ${targetHost}:${targetPort}`);
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`🌐 HTTP Proxy server running on port ${PORT}`);
-  console.log(`📱 Ready for Telegram connections`);
-  console.log(`🔗 Proxy URL: ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}`);
-  
-  // Keep alive mechanism
-  setInterval(() => {
-    console.log(`⏰ ${new Date().toISOString()} - Proxy alive, requests: ${app.locals.requestCount || 0}`);
-  }, 5 * 60 * 1000); // Every 5 minutes
+      // Create connection to target
+      const targetSocket = net.createConnection(targetPort, targetHost);
+
+      targetSocket.on('connect', () => {
+        console.log(`Connected to ${targetHost}:${targetPort}`);
+        
+        // Send success response
+        this.sendSOCKSResponse(clientSocket, 0x00, targetHost, targetPort);
+        
+        // Pipe data between client and target
+        clientSocket.pipe(targetSocket);
+        targetSocket.pipe(clientSocket);
+      });
+
+      targetSocket.on('error', (err) => {
+        console.error(`Target connection error: ${err.message}`);
+        this.sendSOCKSResponse(clientSocket, 0x05); // Connection refused
+      });
+
+      clientSocket.on('error', () => {
+        targetSocket.destroy();
+      });
+
+    } catch (error) {
+      console.error('SOCKS request parsing error:', error);
+      this.sendSOCKSResponse(clientSocket, 0x01); // General failure
+    }
+  }
+
+  sendSOCKSResponse(clientSocket, status, host = '0.0.0.0', port = 0) {
+    const response = Buffer.alloc(10);
+    response[0] = 0x05; // VER
+    response[1] = status; // REP
+    response[2] = 0x00; // RSV
+    response[3] = 0x01; // ATYP (IPv4)
+    
+    // Bind address (0.0.0.0)
+    response[4] = 0x00;
+    response[5] = 0x00;
+    response[6] = 0x00;
+    response[7] = 0x00;
+    
+    // Bind port
+    response[8] = (port >> 8) & 0xFF;
+    response[9] = port & 0xFF;
+    
+    clientSocket.write(response);
+  }
+}
+
+// Start SOCKS5 server
+const socksServer = new SOCKS5Server(SOCKS_PORT);
+socksServer.start();
+
+// Start HTTP server for web interface
+app.listen(HTTP_PORT, () => {
+  console.log(`🌐 Web interface running on port ${HTTP_PORT}`);
+  console.log(`🧦 SOCKS5 proxy running on port ${SOCKS_PORT}`);
+  console.log(`🔗 Access: https://proxy-tl.onrender.com`);
 });
