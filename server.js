@@ -1,11 +1,24 @@
-const net = require('net');
 const express = require('express');
+const WebSocket = require('ws');
+const http = require('http');
+const https = require('https');
+const url = require('url');
 
 const app = express();
-const HTTP_PORT = process.env.PORT || 10000;
-const SOCKS_PORT = 1080;
+const PORT = process.env.PORT || 10000;
 
-// Web interface
+// Create HTTP server
+const server = http.createServer(app);
+
+// Create WebSocket server
+const wss = new WebSocket.Server({ 
+  server,
+  path: '/tunnel'
+});
+
+app.use(express.json());
+
+// Root page
 app.get('/', (req, res) => {
   const host = req.get('host');
   
@@ -13,49 +26,59 @@ app.get('/', (req, res) => {
     <!DOCTYPE html>
     <html>
     <head>
-        <title>🧦 SOCKS5 Proxy on Render</title>
+        <title>🌐 WebSocket Tunnel Proxy</title>
         <style>
             body { font-family: Arial; max-width: 600px; margin: 50px auto; padding: 20px; background: #f8f9fa; }
             .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
             .status { background: #d4edda; color: #155724; padding: 15px; border-radius: 5px; margin: 20px 0; }
             .config { background: #e7f3ff; padding: 15px; border-radius: 5px; font-family: monospace; }
-            .warning { background: #fff3cd; color: #856404; padding: 15px; border-radius: 5px; margin: 20px 0; }
+            .info { background: #d1ecf1; color: #0c5460; padding: 15px; border-radius: 5px; margin: 20px 0; }
             h1 { color: #0088cc; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🧦 SOCKS5 Proxy on Render</h1>
+            <h1>🌐 WebSocket Tunnel Proxy</h1>
             
             <div class="status">
-                <strong>✅ SOCKS5 Server Online</strong><br>
-                Advanced proxy server for applications
+                <strong>✅ WebSocket Tunnel Active</strong><br>
+                Alternative proxy method via WebSocket
             </div>
 
-            <h3>📱 Telegram Configuration:</h3>
+            <h3>📱 Connection Info:</h3>
             <div class="config">
-                <strong>Proxy Type:</strong> SOCKS5<br>
+                <strong>WebSocket URL:</strong> wss://${host}/tunnel<br>
+                <strong>HTTP Proxy:</strong> https://${host}/proxy/*<br>
                 <strong>Server:</strong> ${host}<br>
-                <strong>Port:</strong> ${SOCKS_PORT}<br>
-                <strong>Username:</strong> <em>(leave empty)</em><br>
-                <strong>Password:</strong> <em>(leave empty)</em>
+                <strong>Port:</strong> 443 (HTTPS)
             </div>
 
-            <div class="warning">
-                <strong>⚠️ Note:</strong> SOCKS5 proxy running on port ${SOCKS_PORT}. 
-                This may work better than HTTP proxy for some applications.
+            <div class="info">
+                <strong>💡 How it works:</strong><br>
+                This creates a WebSocket tunnel that can bypass some proxy restrictions.
+                Compatible with applications that support WebSocket proxying.
             </div>
 
-            <h3>🧪 Test Commands:</h3>
+            <h3>🧪 Test Endpoints:</h3>
             <div class="config">
-                # Test SOCKS5 proxy<br>
-                curl --socks5 ${host}:${SOCKS_PORT} https://httpbin.org/ip<br><br>
-                
-                # Test with authentication<br>
-                curl --socks5-hostname ${host}:${SOCKS_PORT} https://api.telegram.org
+                Health: <a href="/health">/health</a><br>
+                Test HTTP: <a href="/proxy/https://httpbin.org/ip">/proxy/https://httpbin.org/ip</a><br>
+                WebSocket: wss://${host}/tunnel
             </div>
 
-            <p><small>⚡ SOCKS5 Proxy powered by Render.com</small></p>
+            <h3>🔧 Usage Examples:</h3>
+            <div class="config">
+                # Test HTTP proxy<br>
+                curl https://${host}/proxy/https://httpbin.org/ip<br><br>
+                
+                # Test Telegram API<br>
+                curl https://${host}/proxy/https://api.telegram.org<br><br>
+                
+                # WebSocket connection<br>
+                wscat -c wss://${host}/tunnel
+            </div>
+
+            <p><small>⚡ WebSocket Tunnel powered by Render.com</small></p>
         </div>
     </body>
     </html>
@@ -64,145 +87,170 @@ app.get('/', (req, res) => {
   res.send(html);
 });
 
+// Health check
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy',
-    type: 'SOCKS5 Proxy',
-    socks_port: SOCKS_PORT,
-    http_port: HTTP_PORT,
-    timestamp: new Date().toISOString()
+    type: 'WebSocket Tunnel Proxy',
+    connections: wss.clients.size,
+    timestamp: new Date().toISOString(),
+    server: req.get('host')
   });
 });
 
-// SOCKS5 Implementation
-class SOCKS5Server {
-  constructor(port) {
-    this.port = port;
-    this.server = net.createServer(this.handleConnection.bind(this));
-  }
-
-  start() {
-    this.server.listen(this.port, () => {
-      console.log(`🧦 SOCKS5 proxy listening on port ${this.port}`);
-    });
-
-    this.server.on('error', (err) => {
-      console.error('SOCKS5 server error:', err);
+// HTTP proxy endpoint
+app.use('/proxy/*', (req, res) => {
+  const targetUrl = req.url.substring('/proxy/'.length);
+  
+  if (!targetUrl.startsWith('http')) {
+    return res.status(400).json({ 
+      error: 'Invalid URL',
+      usage: 'Use: /proxy/https://example.com'
     });
   }
 
-  handleConnection(clientSocket) {
-    console.log('New SOCKS5 connection from:', clientSocket.remoteAddress);
+  console.log('Proxying request to:', targetUrl);
+
+  try {
+    const urlParts = url.parse(targetUrl);
+    const isHttps = urlParts.protocol === 'https:';
+    const protocol = isHttps ? https : http;
     
-    clientSocket.on('data', (data) => {
-      if (data.length < 2) return;
-
-      // SOCKS5 greeting
-      if (data[0] === 0x05) {
-        if (data[1] === 0x01 && data[2] === 0x00) {
-          // No authentication required
-          clientSocket.write(Buffer.from([0x05, 0x00]));
-        } else {
-          clientSocket.end();
-        }
-        return;
+    const options = {
+      hostname: urlParts.hostname,
+      port: urlParts.port || (isHttps ? 443 : 80),
+      path: urlParts.path,
+      method: req.method,
+      headers: {
+        ...req.headers,
+        'host': urlParts.hostname,
+        'user-agent': 'Render-Proxy/1.0'
       }
+    };
 
-      // SOCKS5 request
-      if (data[0] === 0x05 && data[1] === 0x01) {
-        this.handleSOCKSRequest(clientSocket, data);
-      }
+    // Remove proxy-specific headers
+    delete options.headers['x-forwarded-for'];
+    delete options.headers['x-forwarded-proto'];
+
+    const proxyReq = protocol.request(options, (proxyRes) => {
+      // Set CORS headers
+      res.set({
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': '*'
+      });
+      
+      res.status(proxyRes.statusCode);
+      
+      // Copy response headers
+      Object.keys(proxyRes.headers).forEach(header => {
+        res.set(header, proxyRes.headers[header]);
+      });
+      
+      proxyRes.pipe(res);
     });
 
-    clientSocket.on('error', (err) => {
-      console.error('Client socket error:', err);
+    proxyReq.on('error', (err) => {
+      console.error('Proxy request error:', err);
+      res.status(500).json({ 
+        error: 'Proxy request failed',
+        message: err.message,
+        target: targetUrl
+      });
     });
-  }
 
-  handleSOCKSRequest(clientSocket, data) {
-    try {
-      let offset = 4; // Skip VER, CMD, RSV, ATYP
-      
-      let targetHost;
-      let targetPort;
-
-      // Parse address type
-      const atyp = data[3];
-      
-      if (atyp === 0x01) { // IPv4
-        targetHost = `${data[4]}.${data[5]}.${data[6]}.${data[7]}`;
-        offset = 8;
-      } else if (atyp === 0x03) { // Domain name
-        const domainLength = data[4];
-        targetHost = data.slice(5, 5 + domainLength).toString();
-        offset = 5 + domainLength;
-      } else {
-        // Unsupported address type
-        this.sendSOCKSResponse(clientSocket, 0x08);
-        return;
-      }
-
-      targetPort = (data[offset] << 8) + data[offset + 1];
-
-      console.log(`SOCKS5 connecting to: ${targetHost}:${targetPort}`);
-
-      // Create connection to target
-      const targetSocket = net.createConnection(targetPort, targetHost);
-
-      targetSocket.on('connect', () => {
-        console.log(`Connected to ${targetHost}:${targetPort}`);
-        
-        // Send success response
-        this.sendSOCKSResponse(clientSocket, 0x00, targetHost, targetPort);
-        
-        // Pipe data between client and target
-        clientSocket.pipe(targetSocket);
-        targetSocket.pipe(clientSocket);
-      });
-
-      targetSocket.on('error', (err) => {
-        console.error(`Target connection error: ${err.message}`);
-        this.sendSOCKSResponse(clientSocket, 0x05); // Connection refused
-      });
-
-      clientSocket.on('error', () => {
-        targetSocket.destroy();
-      });
-
-    } catch (error) {
-      console.error('SOCKS request parsing error:', error);
-      this.sendSOCKSResponse(clientSocket, 0x01); // General failure
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      req.pipe(proxyReq);
+    } else {
+      proxyReq.end();
     }
+    
+  } catch (error) {
+    console.error('Request processing error:', error);
+    res.status(500).json({ 
+      error: 'Request processing failed',
+      message: error.message 
+    });
   }
+});
 
-  sendSOCKSResponse(clientSocket, status, host = '0.0.0.0', port = 0) {
-    const response = Buffer.alloc(10);
-    response[0] = 0x05; // VER
-    response[1] = status; // REP
-    response[2] = 0x00; // RSV
-    response[3] = 0x01; // ATYP (IPv4)
+// WebSocket tunnel handler
+wss.on('connection', (ws, req) => {
+  console.log('New WebSocket connection');
+  
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      
+      if (data.type === 'connect') {
+        handleTunnelRequest(ws, data);
+      } else if (data.type === 'data') {
+        // Forward data through existing tunnel
+        if (ws.targetSocket) {
+          ws.targetSocket.write(Buffer.from(data.payload, 'base64'));
+        }
+      }
+      
+    } catch (error) {
+      console.error('WebSocket message error:', error);
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: error.message
+      }));
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('WebSocket connection closed');
+    if (ws.targetSocket) {
+      ws.targetSocket.destroy();
+    }
+  });
+});
+
+function handleTunnelRequest(ws, data) {
+  const { hostname, port } = data;
+  
+  console.log(`Creating tunnel to ${hostname}:${port}`);
+  
+  const targetSocket = require('net').createConnection(port, hostname);
+  
+  targetSocket.on('connect', () => {
+    console.log(`Tunnel established to ${hostname}:${port}`);
+    ws.targetSocket = targetSocket;
     
-    // Bind address (0.0.0.0)
-    response[4] = 0x00;
-    response[5] = 0x00;
-    response[6] = 0x00;
-    response[7] = 0x00;
+    ws.send(JSON.stringify({
+      type: 'connected',
+      target: `${hostname}:${port}`
+    }));
     
-    // Bind port
-    response[8] = (port >> 8) & 0xFF;
-    response[9] = port & 0xFF;
-    
-    clientSocket.write(response);
-  }
+    targetSocket.on('data', (data) => {
+      ws.send(JSON.stringify({
+        type: 'data',
+        payload: data.toString('base64')
+      }));
+    });
+  });
+  
+  targetSocket.on('error', (error) => {
+    console.error(`Tunnel error: ${error.message}`);
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: error.message
+    }));
+  });
+  
+  targetSocket.on('close', () => {
+    ws.send(JSON.stringify({
+      type: 'closed'
+    }));
+    ws.close();
+  });
 }
 
-// Start SOCKS5 server
-const socksServer = new SOCKS5Server(SOCKS_PORT);
-socksServer.start();
-
-// Start HTTP server for web interface
-app.listen(HTTP_PORT, () => {
-  console.log(`🌐 Web interface running on port ${HTTP_PORT}`);
-  console.log(`🧦 SOCKS5 proxy running on port ${SOCKS_PORT}`);
-  console.log(`🔗 Access: https://proxy-tl.onrender.com`);
+// Start server
+server.listen(PORT, () => {
+  console.log(`🌐 WebSocket Tunnel Proxy running on port ${PORT}`);
+  console.log(`🔗 WebSocket URL: wss://proxy-tl.onrender.com/tunnel`);
+  console.log(`📱 HTTP Proxy: https://proxy-tl.onrender.com/proxy/*`);
 });
