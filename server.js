@@ -1,12 +1,8 @@
-const express = require('express');
-const net = require('net');
-const crypto = require('crypto');
 const http = require('http');
+const net = require('net');
+const url = require('url');
 
-const app = express();
 const PORT = process.env.PORT || 10000;
-
-// Generate MTProxy secret
 const SECRET = process.env.SECRET || '22c63e538806b501dd6d42ff87840a49';
 const TAG = process.env.TAG || 'ee9108bcc34ba27af2299b8ce7e03626';
 
@@ -14,46 +10,68 @@ console.log('🚀 MTProxy Server Starting...');
 console.log('📝 Secret:', SECRET);
 console.log('🏷️ Tag:', TAG);
 
-// Health check endpoint
-app.get('/', (req, res) => {
-    res.json({
-        status: 'MTProxy Server Running ✅',
-        port: PORT,
-        secret: SECRET,
-        tag: TAG,
-        server: req.get('host'),
-        timestamp: new Date().toISOString(),
-        instructions: {
-            telegram_setup: {
-                server: req.get('host').replace(':' + PORT, ''),
+// Create HTTP server
+const server = http.createServer((req, res) => {
+    const parsedUrl = url.parse(req.url, true);
+    
+    // Set CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, CONNECT');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    
+    if (req.method === 'OPTIONS') {
+        res.writeHead(200);
+        res.end();
+        return;
+    }
+    
+    if (parsedUrl.pathname === '/') {
+        // Health check endpoint
+        const response = {
+            status: 'MTProxy Server Running ✅',
+            port: PORT,
+            secret: SECRET,
+            tag: TAG,
+            server: req.headers.host,
+            timestamp: new Date().toISOString(),
+            instructions: {
+                telegram_setup: {
+                    server: req.headers.host.replace(':' + PORT, ''),
+                    port: 443,
+                    secret: SECRET,
+                    type: 'MTProto'
+                }
+            }
+        };
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(response, null, 2));
+        
+    } else if (parsedUrl.pathname === '/proxy-info') {
+        // MTProxy info endpoint
+        const host = req.headers.host.replace(':' + PORT, '');
+        const response = {
+            server: host,
+            port: 443,
+            secret: SECRET,
+            tag: TAG,
+            telegram_link: `tg://proxy?server=${host}&port=443&secret=${SECRET}`,
+            instructions: {
+                server: host,
                 port: 443,
                 secret: SECRET,
                 type: 'MTProto'
             }
-        }
-    });
+        };
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(response, null, 2));
+        
+    } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not Found');
+    }
 });
-
-// MTProxy info endpoint
-app.get('/proxy-info', (req, res) => {
-    const host = req.get('host').replace(':' + PORT, '');
-    res.json({
-        server: host,
-        port: 443,
-        secret: SECRET,
-        tag: TAG,
-        telegram_link: `tg://proxy?server=${host}&port=443&secret=${SECRET}`,
-        instructions: {
-            server: host,
-            port: 443,
-            secret: SECRET,
-            type: 'MTProto'
-        }
-    });
-});
-
-// Create HTTP server with CONNECT method support
-const server = http.createServer(app);
 
 // Handle CONNECT requests for MTProxy
 server.on('connect', (req, clientSocket, head) => {
